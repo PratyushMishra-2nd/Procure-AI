@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+.pytest_cache/
+# Starter-pack runner output is regenerated on every run; the comparison results
+# under evals/results/ are deliverables and ARE committed.
+evals/results_*.csv
+runs/
+.playwright-mcp/
