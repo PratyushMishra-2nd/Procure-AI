@@ -45,7 +45,7 @@ class FakeClient:
 
 def make_gemini(monkeypatch, *scripts) -> tuple[GeminiLLM, list[ScriptedModels]]:
     monkeypatch.setenv("GEMINI_RPM", "100000")  # no throttling in tests
-    g = GeminiLLM(keys=[f"k{i}" for i in range(len(scripts))], model="gemini-2.5-flash")
+    g = GeminiLLM(keys=[f"k{i}" for i in range(len(scripts))], model="gemini-3.7-flash")
     models = [ScriptedModels(s) for s in scripts]
     g._clients = [FakeClient(m) for m in models]
     return g, models

@@ -1,6 +1,6 @@
 """Model providers behind one small interface (``LLMClient.create``).
 
-Providers: Gemini direct (``src/llm_gemini.py``, default ``gemini-2.5-flash`` -
+Providers: Gemini direct (``src/llm_gemini.py``, default ``gemini-3.7-flash`` -
 free tier), CloseRouter's OpenAI-compatible endpoint (``src/llm_openai_compat.py``,
 default ``google/gemini-3.7-flash``) and Anthropic (this module).
 

@@ -2,9 +2,9 @@
 
 Two Gemini specifics shape this adapter:
 
-* ``gemini-2.5-flash`` cannot combine function calling with a JSON response
-  schema in one request. Tool turns therefore run without a schema; the final
-  answer is parsed from the model's text when it is already a valid object,
+* Older Gemini models (e.g. ``gemini-2.5-flash``) cannot combine function calling
+  with a JSON response schema in one request. To stay model-agnostic, tool turns
+  run without a schema; the final answer is parsed from the model's text when it is already a valid object,
   and otherwise a second, tool-free call with ``response_json_schema`` produces it.
 * The free tier is rate limited per key (requests per minute and per day).
   Calls are spaced to ``GEMINI_RPM`` per key, several keys can be pooled with
@@ -23,7 +23,7 @@ from typing import Any
 from src.llm import LLMResponse, LLMUnavailable, ToolUse, extract_json_object, has_required_keys
 from src.telemetry import RunTelemetryCounter
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.7-flash"
 _THROTTLE_LOCK = threading.Lock()
 _LAST_CALL = [0.0]
 

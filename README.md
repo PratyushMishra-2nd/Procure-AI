@@ -55,11 +55,11 @@ B  request -> Procurement Analyst (5 tools, evidence pack) -> Policy/Risk Review
 
 - **Tools** (all deterministic): `lookup_requester`, `check_budget`, `search_software_catalog`, `get_vendor_risk` (registry + mock API), `evaluate_policy_rules`.
 - **Models** (chosen for the free tier):
-  - **Default:** `gemini-2.5-flash` on Google AI Studio through the official `google-genai` SDK, at temperature 0.
+  - **Default:** `gemini-3.7-flash` on Google AI Studio (`gemini-2.5-flash` is closed to new keys) through the official `google-genai` SDK, at temperature 0.
   - **Alternative:** `google/gemini-3.7-flash` through CloseRouter's OpenAI-compatible endpoint.
   - **Optional:** Anthropic.
   - Provider is picked automatically from the keys present, or forced with `LLM_PROVIDER`.
-  - `gemini-2.5-flash` cannot combine function calling with a JSON schema in one call. Tool turns therefore run without a schema; the final answer is parsed from the model's text, and if it is not valid JSON, one tool-free schema-enforced call is made.
+  - Older Gemini models cannot combine function calling with a JSON schema in one call, so tool turns run without a schema; the final answer is parsed from the model's text, and if it is not valid JSON, one tool-free schema-enforced call is made.
   - Free-tier handling: calls are spaced to `GEMINI_RPM`, 429/503 errors back off using the server's retry delay, and `GEMINI_API_KEY_POOL` rotates keys. History is append-only, so Gemini thought signatures are replayed unchanged.
 - **Policy guard:** a union of model and rule requirements. Fact flags no tool raised are removed, and actions less cautious than the rules are raised. Every correction is logged and counted in the eval.
 - **Untrusted data:** request JSON is wrapped in `<request_data>`. A regex scanner plus the model flag injection. Injected text is removed before the "is the business purpose real?" check, so REQ-1006's "Need AI ASAP" counts as too vague.

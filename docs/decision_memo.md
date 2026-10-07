@@ -3,7 +3,7 @@
 ## Decision
 Ship **Architecture A, the single agent**, behind the deterministic policy guard.
 
-> **Status:** provisional. Live-model cells are pending because no API key was available. Structural and rules-only numbers are measured. Set `GEMINI_API_KEY` (free tier, `gemini-2.5-flash`) and run `python evals/run_comparison.py` to fill them in.
+> **Status:** provisional. Live-model cells are pending because no API key was available. Structural and rules-only numbers are measured. Set `GEMINI_API_KEY` (free tier, `gemini-3.7-flash`) and run `python evals/run_comparison.py` to fill them in.
 
 ## Evidence
 Same 26 cases for every column: 6 public cases plus 20 extended ones (all 10 dataset requests and 10 synthetic edge cases).
