@@ -56,6 +56,7 @@ class GeminiLLM:
         timeout_ms = int(float(os.getenv("COPILOT_LLM_TIMEOUT", "120")) * 1000)
         self._clients = [genai.Client(api_key=k, http_options=types.HttpOptions(timeout=timeout_ms)) for k in keys]
         self._index = 0
+        self._exhausted: set[int] = set()
         self.model = model or os.getenv("GEMINI_MODEL") or DEFAULT_MODEL
         rpm = max(1.0, float(os.getenv("GEMINI_RPM", "10")))
         self._min_interval = 60.0 / (rpm * len(self._clients))
@@ -121,6 +122,8 @@ class GeminiLLM:
     def _generate(self, agent: str, contents: list, config: Any, telemetry: RunTelemetryCounter) -> Any:
         from google.genai import errors
 
+        if len(self._exhausted) == len(self._clients):
+            raise LLMUnavailable("Gemini free-tier daily request quota exhausted on every key")
         deadline = time.monotonic() + self._max_wait
         attempt = 0
         while True:
@@ -136,6 +139,13 @@ class GeminiLLM:
                 telemetry.event("llm_retry" if retryable else "llm_error", agent=agent, code=code, key_index=self._index)
                 if not retryable:
                     raise LLMUnavailable(f"Gemini API error {code}: {str(getattr(exc, 'message', '') or exc)[:200]}") from exc
+                if code == 429 and self._is_daily_quota(exc):
+                    # Waiting cannot help with a per-day cap: retire this key for the process.
+                    self._exhausted.add(self._index)
+                    if len(self._exhausted) == len(self._clients):
+                        raise LLMUnavailable("Gemini free-tier daily request quota exhausted on every key") from exc
+                    self._index = next(i for i in range(len(self._clients)) if i not in self._exhausted)
+                    continue
                 if len(self._clients) > 1:
                     self._index = (self._index + 1) % len(self._clients)
                 wait = self._retry_delay(exc, attempt)
@@ -163,6 +173,13 @@ class GeminiLLM:
             if wait > 0:
                 time.sleep(wait)
             _LAST_CALL[0] = time.monotonic()
+
+    @staticmethod
+    def _is_daily_quota(exc: Exception) -> bool:
+        text = str(exc)
+        return bool(re.search(r"per ?day|PerDay|retry in \d+h", text, flags=re.IGNORECASE)) or (
+            "free_tier_requests" in text and not re.search(r"retry(?:Delay| in)[\"':\s]*[0-9.]+\s*s", text, flags=re.IGNORECASE)
+        )
 
     @staticmethod
     def _retry_delay(exc: Exception, attempt: int) -> float:

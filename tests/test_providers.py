@@ -201,3 +201,16 @@ def test_provider_selection(monkeypatch, env, expected):
 ])
 def test_extract_json_object(text, ok):
     assert (llm.extract_json_object(text) is not None) == ok
+
+
+def test_gemini_daily_quota_fails_fast_and_skips_later_calls(monkeypatch):
+    slept = []
+    monkeypatch.setattr("src.llm_gemini.time.sleep", lambda s: slept.append(s))
+    daily = errors.ClientError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message":
+        "Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20. Please retry in 15h36m20.8s."}})
+    g, (m,) = make_gemini(monkeypatch, [daily])
+    d1 = analyze_request(get_request("REQ-1001"), "single", llm=g)
+    d2 = analyze_request(get_request("REQ-1002"), "single", llm=g)
+    assert "daily request quota" in d1.ai_error and "daily request quota" in d2.ai_error
+    assert len(m.requests) == 1  # second request never hit the API
+    assert not [s for s in slept if s > 1]  # no long backoff waits
