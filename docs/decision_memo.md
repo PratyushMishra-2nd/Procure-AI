@@ -24,13 +24,15 @@ Every architecture gets every approval and escalation right, because the rules e
 - **SYN-10** (the need is covered by a tool in another category): only A finds it. A made the extra use-case catalog search that W cannot make and B's analyst did not.
 - **HO-08** (held-out, an existing wiki covers the need): all four miss it.
 
+A's lead is on the extended set, which was used while building; on held-out cases there is no difference.
+
 ## Trade-offs
-- **A vs W:** W is cheaper (1 call, 2.6× fewer tokens, 1 s faster) but scores exactly like rules-only. A fixed workflow cannot go looking for evidence, and that is where the model adds value.
+- **A vs W:** W is cheaper (1 call, 2.6× fewer tokens, 1 s faster) but scores exactly like rules-only. A fixed workflow cannot look for more evidence.
 - **B:** costs 50% more calls than A and is the slowest, and it lost both judgement cases A won. Splitting the work across two models lost context.
-- **A's cost:** 3 s and ~8k tokens per request, which is acceptable for a procurement review.
+- **A's cost:** 3 s and ~8k tokens per request; acceptable for procurement review.
 
 ## Risks / limitations
-1. One trial on a small, fast model. Repeat with 3 trials and a stronger model before production; the gaps are 1–2 cases.
+1. One trial on a small model; the gap is 2 cases. Repeat with 3 trials and a stronger model.
 2. HO-08 shows reuse judgement still fails on unseen phrasing. It needs better overlap prompting or a semantic catalog search.
 3. Policy interpretations need sign-off from the policy owners.
 4. Injection detection is keyword-based, plus the model's own flag.
