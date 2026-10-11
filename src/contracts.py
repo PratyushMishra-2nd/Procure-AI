@@ -28,7 +28,7 @@ class ProcurementDecision(BaseModel):
     telemetry: RunTelemetry | None = None
 
 
-Architecture = Literal["single", "staged"]
+Architecture = Literal["single", "staged", "workflow"]
 
 Action = Literal["request_clarification", "reuse_existing_tool", "route_for_review", "route_for_approval"]
 

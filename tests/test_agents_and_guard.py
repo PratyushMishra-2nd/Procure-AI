@@ -263,3 +263,22 @@ def test_blank_csv_cells_are_none_not_nan():
 
     assert find_vendor("BrandBoard")["security_review_date"] is None
     assert find_employee("E010")["manager_id"] is None
+
+
+# ---------------------------------------------------------------- workflow (code gathers, one model call decides)
+
+
+def test_workflow_runs_all_tools_in_code_and_makes_one_model_call():
+    draft = decision_draft(action="route_for_review", required_approvals=["Department Head", "Procurement", "Finance", "Security"],
+                           risk_flags=["security_review_required", "existing_tool_overlap"], overlap_assessment="expansion_of_existing_tool")
+    d, llm = run("REQ-1003", "workflow", [answer(draft)])
+    assert d.architecture == "workflow" and d.ai_status == "ok"
+    assert d.telemetry.llm_calls == 1 and llm.calls[0]["tools"] is None
+    assert sorted(d.telemetry.tool_names) == sorted(ALL_TOOLS)
+    assert "<evidence_items>" in llm.calls[0]["messages"][0]["content"]
+    assert d.guard_adjustments == []
+
+
+def test_workflow_model_failure_degrades():
+    d, _ = run("REQ-1005", "workflow", [LLMUnavailable("429")])
+    assert d.ai_status == "unavailable" and "budget_insufficient" in d.risk_flags

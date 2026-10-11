@@ -49,13 +49,12 @@ SPECIALIST = {"Security", "Privacy", "Legal", "Finance", "CFO"}
 
 
 def load_cases(which: str) -> list[dict[str, Any]]:
+    """public (6, starter) + extended (20, used while building) + heldout (8, written before any model saw them)."""
     cases: list[dict[str, Any]] = []
-    if which in {"public", "all"}:
-        for c in json.loads((ROOT / "evals" / "public_cases.json").read_text(encoding="utf-8")):
-            cases.append({**c, "suite": "public"})
-    if which in {"extended", "all"}:
-        for c in json.loads((ROOT / "evals" / "extended_cases.json").read_text(encoding="utf-8")):
-            cases.append({**c, "suite": "extended"})
+    for suite, filename in (("public", "public_cases.json"), ("extended", "extended_cases.json"), ("heldout", "heldout_cases.json")):
+        if which in {suite, "all"}:
+            for c in json.loads((ROOT / "evals" / filename).read_text(encoding="utf-8")):
+                cases.append({**c, "suite": suite})
     return cases
 
 
@@ -170,6 +169,7 @@ def build_row(case: dict[str, Any], arch: str, rep: int, d: CopilotDecision) -> 
         "cited_evidence": d.diagnostics.get("cited_count", 0),
         "evidence_items": len(d.evidence),
         "latency_ms": d.latency_ms,
+        "llm_ms": d.diagnostics.get("llm_ms", 0),  # time inside model calls only (excludes rate-limit pacing)
         "llm_calls": d.telemetry.llm_calls if d.telemetry else 0,
         "tool_calls": d.telemetry.tool_calls if d.telemetry else 0,
         "input_tokens": d.diagnostics.get("input_tokens", 0),
@@ -221,9 +221,9 @@ def write_outputs(stem: str, rows: list[dict[str, Any]], meta: dict[str, Any], p
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--arch", nargs="+", default=["single", "staged", "rules_only"],
-                        choices=["single", "staged", "rules_only"])
-    parser.add_argument("--cases", default="all", choices=["public", "extended", "all"])
+    parser.add_argument("--arch", nargs="+", default=["single", "staged", "workflow", "rules_only"],
+                        choices=["single", "staged", "workflow", "rules_only"])
+    parser.add_argument("--cases", default="all", choices=["public", "extended", "heldout", "all"])
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--tag", default="", help="suffix for output files")
     parser.add_argument("--resume", action="store_true", help="continue a stopped run (same provider/model only)")
@@ -328,11 +328,12 @@ HOW_MEASURED = """## How each metric is measured
 
 - **Valid runs**: live runs where the model actually answered (`ai_status == ok`). A live run that fell back to rules-only (quota, outage, bad output) is *excluded* from every quality metric below and counted separately - it would otherwise score the rules engine as if it were the model.
 - **Public minimum checks**: the starter harness's own `evaluate()` on the 6 public cases.
-- **Strict checks (extended)**: exact approval set, required + forbidden risk flags, missing-information fields and the recommended action, against hand-labelled expectations in `evals/extended_cases.json`.
+- **Held-out**: 8 cases written from the policy text before any model was run on them and never used to tune prompts or rules (`evals/heldout_cases.json`). Extended cases *were* used while building, so held-out is the honest generalisation check.
+- **Strict checks (extended / held-out)**: exact approval set, required + forbidden risk flags, missing-information fields and the recommended action, against hand-labelled expectations in `evals/extended_cases.json`.
 - **Human escalation correct**: no required Security / Privacy / Legal / Finance / CFO approval missing and the action is not less cautious than review / clarification when those are expected.
 - **Guard corrections**: times the deterministic policy guard had to add, remove, raise, correct or replace something in the model's draft (raw model policy misses). Final outputs include the corrections.
 - **Valid citations**: every evidence ID the model cited exists in the tool results of that run.
-- **Latency**: wall-clock time of `analyze_request`, including client-side pacing for free-tier rate limits. **Model / tool calls and tokens**: from the run's own telemetry (provider-reported token usage).
+- **Latency**: wall-clock time of `analyze_request`, *including* client-side waiting to stay under the free tier's tokens-per-minute cap - so on Groq it mostly measures the rate limit. **Model time** is the sum of the model calls themselves and is the fairer speed comparison. **Model / tool calls and tokens**: from the run's own telemetry (provider-reported token usage).
 """
 
 
@@ -340,7 +341,7 @@ def summarise(rows: list[dict[str, Any]], meta: dict[str, Any], planned: int) ->
     by_arch: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
         by_arch[r["architecture"]].append(r)
-    archs = [a for a in ("single", "staged", "rules_only") if a in by_arch]
+    archs = [a for a in ("single", "staged", "workflow", "rules_only") if a in by_arch]
     valid = {a: [r for r in by_arch[a] if r.get("live_valid")] for a in archs}
 
     def pct(rs, key):
@@ -365,6 +366,8 @@ def summarise(rows: list[dict[str, Any]], meta: dict[str, Any], planned: int) ->
         ("Runs that fell back to rules-only (excluded)", lambda a, rs: str(len(by_arch[a]) - len(rs)) if live(a) else "n/a"),
         ("Public cases meeting minimum expectations", lambda a, rs: pct([r for r in rs if r["suite"] == "public"], "public_min_pass")),
         ("Extended cases passing strict checks", lambda a, rs: pct(ext(rs), "strict_pass")),
+        ("**Held-out cases passing strict checks**", lambda a, rs: pct([r for r in rs if r["suite"] == "heldout"], "strict_pass")),
+        ("Correct next action (held-out)", lambda a, rs: pct([r for r in rs if r["suite"] == "heldout"], "correct_next_action")),
         ("Correct next action (extended)", lambda a, rs: pct(ext(rs), "correct_next_action")),
         ("Exact approval set (extended)", lambda a, rs: pct(ext(rs), "approvals_exact")),
         ("Human escalation correct (extended)", lambda a, rs: pct(ext(rs), "human_escalation_correct")),
@@ -372,6 +375,7 @@ def summarise(rows: list[dict[str, Any]], meta: dict[str, Any], planned: int) ->
         ("Guard corrections (total raw model misses)", lambda a, rs: str(sum(int(r["guard_corrections"]) for r in rs if str(r.get("guard_corrections", "")).isdigit())) if live(a) else "n/a"),
         ("Runs needing >=1 guard correction", lambda a, rs: f"{sum(1 for r in rs if str(r.get('guard_corrections', '')).isdigit() and int(r['guard_corrections']) > 0)}/{len(rs)}" if live(a) else "n/a"),
         ("Avg latency (ms)", lambda a, rs: f"{_mean([r['latency_ms'] for r in rs if r.get('latency_ms') is not None]):,.0f}"),
+        ("Avg model time (ms, excl. pacing)", lambda a, rs: f"{_mean([r['llm_ms'] for r in rs if r.get('llm_ms') is not None]):,.0f}" if any('llm_ms' in r for r in rs) else "-"),
         ("p95 latency (ms)", lambda a, rs: f"{_p95([r['latency_ms'] for r in rs if r.get('latency_ms') is not None]):,.0f}"),
         ("Avg LLM calls", lambda a, rs: f"{_mean([r.get('llm_calls', 0) for r in rs]):.2f}"),
         ("Avg tool calls", lambda a, rs: f"{_mean([r.get('tool_calls', 0) for r in rs]):.2f}"),

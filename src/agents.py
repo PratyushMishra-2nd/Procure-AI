@@ -4,6 +4,7 @@ Both share the same tools, the same deterministic engine and the same policy
 guard, so the comparison isolates the one thing that differs: how the model work
 is split.
 
+W  UI -> code runs all tools -> one model call (decides) -> policy guard -> decision
 A  UI -> Procurement Agent (tools loop, decides) -> policy guard -> decision
 B  UI -> Procurement Analyst (tools loop, evidence pack)
         -> Policy / Risk Reviewer (no tools, decides) -> policy guard -> decision
@@ -66,20 +67,7 @@ def run_staged(request: dict[str, Any], llm: LLMClient | None, disabled: bool = 
     try:
         pack = tool_loop(llm, "procurement_analyst", prompts.analyst_system(), prompts.request_message(request),
                          ctx, prompts.EVIDENCE_PACK_SCHEMA)
-        policy = ctx.policy(caller="orchestrator")
-        for finding in policy.findings:  # reviewer sees every deterministic fact, citable by ID
-            ctx.add_evidence(finding)
-        evidence = [{"id": eid, **item.model_dump()} for eid, item in zip(ctx.evidence_ids, ctx.evidence)]
-        policy_view = {
-            "required_approvals": policy.required_approvals,
-            "approval_reasons": policy.approval_reasons,
-            "risk_flags": policy.risk_flags,
-            "flag_reasons": policy.flag_reasons,
-            "missing_information": list(policy.missing_fields.values()),
-            "missing_field_keys": list(policy.missing_fields),
-            "least_cautious_permissible_action": policy.action_floor,
-            "financial_tier": policy.financial_tier,
-        }
+        evidence, policy_view = _evidence_and_policy(ctx)
         resp = llm.create(
             agent="policy_reviewer",
             system=prompts.reviewer_system(),
@@ -93,6 +81,51 @@ def run_staged(request: dict[str, Any], llm: LLMClient | None, disabled: bool = 
         return _deterministic(ctx, "staged", error=str(exc), model=llm.model)
     return finalize(ctx, draft, architecture="staged", ai_status="ok", ai_error=None, model=llm.model,
                     extra_diagnostics={"analyst_pack": pack})
+
+
+def run_workflow(request: dict[str, Any], llm: LLMClient | None, disabled: bool = False) -> CopilotDecision:
+    """Simplest LLM option: code runs every tool, then ONE model call interprets and decides.
+
+    No agent loop and no tool choice by the model. It exists to test whether agency adds
+    anything over a fixed workflow that hands the model the same evidence.
+    """
+    ctx = ToolContext(request=request)
+    if llm is None:
+        return _deterministic(ctx, "workflow", disabled=disabled)
+    ctx.gather_all(caller="workflow")
+    try:
+        evidence, policy_view = _evidence_and_policy(ctx)
+        resp = llm.create(
+            agent="workflow_decider",
+            system=prompts.workflow_system(),
+            messages=[{"role": "user", "content": prompts.workflow_message(request, evidence, policy_view)}],
+            tools=None,
+            output_schema=prompts.DECISION_SCHEMA,
+            telemetry=ctx.telemetry,
+        )
+        draft = resp.json()
+    except LLMUnavailable as exc:
+        return _deterministic(ctx, "workflow", error=str(exc), model=llm.model)
+    return finalize(ctx, draft, architecture="workflow", ai_status="ok", ai_error=None, model=llm.model)
+
+
+def _evidence_and_policy(ctx: ToolContext) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """All evidence (with IDs the model can cite) plus the deterministic policy result."""
+    policy = ctx.policy(caller="orchestrator")
+    for finding in policy.findings:
+        ctx.add_evidence(finding)
+    evidence = [{"id": eid, **item.model_dump()} for eid, item in zip(ctx.evidence_ids, ctx.evidence)]
+    policy_view = {
+        "required_approvals": policy.required_approvals,
+        "approval_reasons": policy.approval_reasons,
+        "risk_flags": policy.risk_flags,
+        "flag_reasons": policy.flag_reasons,
+        "missing_information": list(policy.missing_fields.values()),
+        "missing_field_keys": list(policy.missing_fields),
+        "least_cautious_permissible_action": policy.action_floor,
+        "financial_tier": policy.financial_tier,
+    }
+    return evidence, policy_view
 
 
 def _deterministic(ctx: ToolContext, architecture: str, error: str | None = None, model: str | None = None,

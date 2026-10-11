@@ -59,11 +59,12 @@ with st.sidebar:
     st.header("Architecture")
     arch_label = st.radio(
         "Architecture",
-        ["A - Single agent", "B - Analyst + Reviewer", "Rules only (no AI)"],
+        ["A - Single agent", "B - Analyst + Reviewer", "W - Workflow + 1 LLM call", "Rules only (no AI)"],
         label_visibility="collapsed",
         help="A and B use the same tools, rules and guard; only the split of model work differs.",
     )
-    architecture = {"A - Single agent": "single", "B - Analyst + Reviewer": "staged"}.get(arch_label, "rules_only")
+    architecture = {"A - Single agent": "single", "B - Analyst + Reviewer": "staged",
+                    "W - Workflow + 1 LLM call": "workflow"}.get(arch_label, "rules_only")
     st.divider()
     provider, model = describe_provider()
     ai_line = f"AI: **{provider}** · `{model}`" if provider else "AI: not configured - rules-only fallback (set GEMINI_API_KEY in .env)"
@@ -210,7 +211,7 @@ m[0].metric("Latency", f"{(d.latency_ms or 0) / 1000:.1f} s")
 m[1].metric("LLM calls", tel.llm_calls if tel else 0)
 m[2].metric("Tool calls", tel.tool_calls if tel else 0)
 m[3].metric("Tokens in/out", f"{d.diagnostics.get('input_tokens', 0):,}/{d.diagnostics.get('output_tokens', 0):,}")
-m[4].metric("Architecture", {"single": "A", "staged": "B"}.get(d.architecture, d.architecture) if d.ai_status == "ok" else "rules")
+m[4].metric("Architecture", {"single": "A", "staged": "B", "workflow": "W"}.get(d.architecture, d.architecture) if d.ai_status == "ok" else "rules")
 st.caption(
     f"Produced by: {'**' + (d.provider or '?') + '** · `' + (d.model or '?') + '`' if d.ai_status == 'ok' else '**rules only** (no model output used)'}"
     + (f" · AI error: {d.ai_error}" if d.ai_error else "")

@@ -29,8 +29,10 @@ def analyze_request(request: dict[str, Any], architecture: Architecture = "singl
         decision = agents.run_single(request, client, disabled=disabled)  # type: ignore[arg-type]
     elif architecture == "staged":
         decision = agents.run_staged(request, client, disabled=disabled)  # type: ignore[arg-type]
+    elif architecture == "workflow":
+        decision = agents.run_workflow(request, client, disabled=disabled)  # type: ignore[arg-type]
     else:
-        raise ValueError(f"Unknown architecture '{architecture}' (expected 'single' or 'staged')")
+        raise ValueError(f"Unknown architecture '{architecture}' (expected 'single', 'staged' or 'workflow')")
     decision.latency_ms = round((time.perf_counter() - started) * 1000, 1)
     decision.provider = getattr(client, "provider", None) if client is not None else None
     return decision

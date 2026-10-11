@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install -r requirements.txt
+      - name: Pre-flight (data, contract, mock API, end-to-end rules-only run, no secrets tracked)
+        run: python verify_setup.py
+      - name: Tests
+        run: python -m pytest -q
+      - name: Starter public evals (rules-only, no key in CI)
+        env:
+          COPILOT_LLM: "off"
+        run: python evals/run_public_evals.py --architecture single
+      - name: Offline baseline is reproducible (decisions, not timings)
+        env:
+          COPILOT_LLM: "off"
+        run: |
+          git show HEAD:evals/results/rules_only_runs.csv > /tmp/committed.csv
+          python evals/run_comparison.py --arch rules_only --fresh
+          python - <<'EOF'
+          import csv
+          cols = ("case_id", "architecture", "action", "strict_pass", "failures")
+          load = lambda f: [tuple(r[c] for c in cols) for r in csv.DictReader(open(f, encoding="utf-8"))]
+          committed, fresh = load("/tmp/committed.csv"), load("evals/results/rules_only_runs.csv")
+          assert committed == fresh, "rules-only decisions drifted from the committed results"
+          print(f"{len(fresh)} rules-only decisions match the committed results")
+          EOF
