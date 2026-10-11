@@ -1,29 +1,29 @@
 # Architecture comparison
 
-> **INCOMPLETE:** 22 of 136 planned runs finished. Numbers below cover finished runs only.
+> **INCOMPLETE:** 24 of 136 planned runs finished. Numbers below cover finished runs only.
 
 Provider `groq`, model `qwen/qwen3.8-27b`, repeats 1, cases `all`. Same cases, tools, deterministic engine and guard for every column; `rules_only` is the deterministic engine with no model (offline baseline, says nothing about model reasoning).
 
 | Metric | single | staged | workflow | rules_only |
 |---|---:|---:|---:|---:|
-| Valid runs (live: model answered) | 6/6 | 6/6 | 5/6 | 5/5 |
-| Runs that fell back to rules-only (excluded) | 0 | 0 | 1 | n/a |
-| Public cases meeting minimum expectations | 6/6 | 6/6 | 5/5 | 5/5 |
+| Valid runs (live: model answered) | 6/7 | 6/7 | 6/7 | 6/6 |
+| Runs that fell back to rules-only (excluded) | 1 | 1 | 1 | n/a |
+| Public cases meeting minimum expectations | 6/6 | 6/6 | 6/6 | 6/6 |
 | Extended cases passing strict checks | - | - | - | - |
 | **Held-out cases passing strict checks** | - | - | - | - |
 | Correct next action (held-out) | - | - | - | - |
 | Correct next action (extended) | - | - | - | - |
 | Exact approval set (extended) | - | - | - | - |
 | Human escalation correct (extended) | - | - | - | - |
-| Runs with only valid evidence citations | 6/6 | 6/6 | 5/5 | n/a |
+| Runs with only valid evidence citations | 6/6 | 6/6 | 6/6 | n/a |
 | Guard corrections (total raw model misses) | 1 | 0 | 1 | n/a |
-| Runs needing >=1 guard correction | 1/6 | 0/6 | 1/5 | n/a |
-| Avg latency (ms) | 131,109 | 181,998 | 48,698 | 10 |
-| Avg model time (ms, excl. pacing) | - | 7,039 | 2,944 | - |
+| Runs needing >=1 guard correction | 1/6 | 0/6 | 1/6 | n/a |
+| Avg latency (ms) | 131,109 | 181,998 | 41,030 | 12 |
+| Avg model time (ms, excl. pacing) | - | 7,039 | 2,898 | 0 |
 | p95 latency (ms) | 181,421 | 188,278 | 60,582 | 23 |
 | Avg LLM calls | 2.33 | 4.00 | 1.00 | 0.00 |
 | Avg tool calls | 5.33 | 6.00 | 5.00 | 5.00 |
-| Avg tokens in / out | 10,335 / 807 | 14,550 / 2,006 | 3,848 / 662 | 0 / 0 |
+| Avg tokens in / out | 10,335 / 807 | 14,550 / 2,006 | 3,868 / 647 | 0 / 0 |
 | Avg cost per request (USD) | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
 
 ## How each metric is measured
@@ -46,4 +46,5 @@ Provider `groq`, model `qwen/qwen3.8-27b`, repeats 1, cases `all`. Same cases, t
 | PUB-03 | 1/1 | 1/1 | 1/1 | 1/1 |
 | PUB-04 | 1/1 | 1/1 | 1/1 | 1/1 |
 | PUB-05 | 1/1 | 1/1 | 1/1 | 1/1 |
-| PUB-06 | 1/1 | 1/1 | not run / fell back | not run / fell back |
+| PUB-06 | 1/1 | 1/1 | 1/1 | 1/1 |
+| EXT-01 | not run / fell back | not run / fell back | not run / fell back | not run / fell back |

@@ -56,8 +56,8 @@ B  request -> Procurement Analyst (5 tools, evidence pack) -> Policy/Risk Review
 
 - Tools (all deterministic): `lookup_requester`, `check_budget`, `search_software_catalog`, `get_vendor_risk` (registry + mock API), `evaluate_policy_rules`.
 - Models (chosen for the free tier):
-  - Gemini: `gemini-3.7-flash` on Google AI Studio (`gemini-2.5-flash` is closed to new keys) through the official `google-genai` SDK, at temperature 0. Free tier: 20 requests/day per key, so it suits the UI, not a full eval.
-  - Groq: `qwen/qwen3.8-27b` through Groq's OpenAI-compatible API. Free tier: about 1000 requests/day but 8000 tokens/minute, so calls are paced by a token-aware limiter. Qwen was picked over `openai/gpt-oss-120b` because it issues all five tool calls in one turn; gpt-oss calls one tool per turn, roughly tripling the tokens per case. Used for the live evaluation.
+  - Gemini: `gemini-3.7-flash` on Google AI Studio (`gemini-2.5-flash` is closed to new keys) through the official `google-genai` SDK, at temperature 0. Free tier: 20 requests/day per key, so `gemini-3.7-flash` suits the UI; the full live evaluation used `gemini-3.5-flash-lite`, whose free quota is larger.
+  - Groq: `qwen/qwen3.8-27b` through Groq's OpenAI-compatible API. Free tier: about 1000 requests/day but 8000 tokens/minute, so calls are paced by a token-aware limiter. Qwen was picked over `openai/gpt-oss-120b` because it issues all five tool calls in one turn; gpt-oss calls one tool per turn, roughly tripling the tokens per case. Hit its daily quota after the public cases.
   - Also supported: `google/gemini-3.7-flash` through CloseRouter, and Anthropic.
   - The provider is picked automatically from the keys present (Gemini → Groq → CloseRouter → Anthropic), or forced with `LLM_PROVIDER`. A forced provider with a missing key is reported by name, not silently ignored. There is deliberately no automatic switching between providers mid-run, so an eval never mixes models.
   - Older Gemini models cannot combine function calling with a JSON schema in one call, so tool turns run without a schema; the final answer is parsed from the model's text, and if it is not valid JSON, one tool-free schema-enforced call is made.
@@ -97,30 +97,40 @@ Results are committed under [`evals/results/`](evals/results/):
 - Progress is saved after every case (`.jsonl`). After a quota stop, `--resume` continues and refuses to mix in a different provider or model.
 - A live run that fell back to rules-only is excluded from quality metrics, counted separately, and re-run on resume.
 
-Live comparison on the 6 public cases, Groq `qwen/qwen3.8-27b`, same cases/tools/rules/guard for every architecture ([summary](evals/results/live_groq_qwen-qwen3-8-27b_summary.md)):
+**Live comparison on all 34 cases**, Gemini `gemini-3.5-flash-lite`, same cases, tools, rules and guard for every architecture ([summary](evals/results/live_gemini_gemini-3-5-flash-lite_summary.md)):
 
-| Metric | W workflow | A single | B staged | Rules only |
+| Metric | A single | B staged | W workflow | Rules only |
 |---|---:|---:|---:|---:|
-| Public cases meeting expectations | 5/5 | 6/6 | 6/6 | 6/6 |
-| Extended strict checks | 19/20 | 19/20 | 18/20 | 18/20 |
-| Held-out strict checks | 8/8 | 8/8 | 7/8 | 7/8 |
-| Runs with only valid citations | 5/5 | 6/6 | 6/6 | n/a |
-| Guard corrections (raw model misses) | 1 | 1 | 0 | n/a |
-| Model calls / request | 1.0 | 2.3 | 4.0 | 0 |
-| Input tokens / request | 3.8k | 10.3k | 14.6k | 0 |
-| Wall-clock incl. free-tier pacing | 49 s | 131 s | 182 s | 10 ms |
+| Public cases meeting expectations | 6/6 | 6/6 | 6/6 | 6/6 |
+| Extended strict checks | **20/20** | 18/20 | 18/20 | 18/20 |
+| Held-out strict checks | 7/8 | 7/8 | 7/8 | 7/8 |
+| Human escalation correct (extended) | 20/20 | 20/20 | 20/20 | 20/20 |
+| Runs with only valid citations | 34/34 | 34/34 | 34/34 | n/a |
+| Runs needing a guard correction | 4/34 | 4/34 | 4/34 | n/a |
+| Model calls / request | 2.0 | 3.0 | 1.0 | 0 |
+| Input tokens / request | 8.1k | 8.8k | 3.1k | 0 |
+| Model time / request | 3.0 s | 4.9 s | 2.0 s | 0 |
 
-Rules-only baseline on all 34 cases ([summary](evals/results/rules_only_summary.md)): 6/6 public, 18/20 extended, 7/8 held-out. It misses only the judgement cases, where an existing tool already covers the need. Those cases are what the model is for.
+All architectures get every approval and escalation right, because those are enforced in code. They differ only on the judgement cases where an existing tool already covers the need:
+- **EXT-08:** only A recommends reusing TaskFlow.
+- **SYN-10:** only A finds the cross-category match, by making an extra catalog search.
+- **HO-08:** all four miss it.
 
-Cases: 6 public (starter) + 20 extended (all 10 dataset requests + 10 synthetic edge cases) + 8 held-out, written from the policy before any model run and never used for tuning = 34. Extend the live run to all 34 cases with 3 repeats: `python evals/run_comparison.py --resume --repeats 3`.
+An earlier Groq `qwen/qwen3.8-27b` run covered only the public cases before hitting the daily quota ([summary](evals/results/live_groq_qwen-qwen3-8-27b_summary.md)).
 
-## Decision: ship W (workflow + one model call)
+Cases: 6 public (starter) + 20 extended (all 10 dataset requests + 10 synthetic edge cases) + 8 held-out, written from the policy before any model run and never used for tuning = 34. For 3 repeats: `python evals/run_comparison.py --repeats 3`.
 
-See [docs/decision_memo.md](docs/decision_memo.md) (under 500 words). Policy safety lives in code and is identical across architectures. On the live public cases W matched A and B while using 1 model call and 3.8k tokens per request (A: 2.3 calls, 10.3k; B: 4 calls, 14.6k). The simplest system that performs as well is the stronger answer. A remains the fallback if wider runs show W missing judgement cases.
+## Decision: ship A (single agent)
+
+See [docs/decision_memo.md](docs/decision_memo.md) (under 500 words). Policy safety lives in code and is identical across architectures; the only measured difference is overlap judgement.
+- **A** wins both extended judgement cases, at 2 calls and 3 s per request.
+- **W** is cheapest but scores exactly like rules-only, because a fixed workflow can't go looking for extra evidence.
+- **B** costs more and lost the cases A won.
 
 ## Known limitations
 
-- Live evaluation covers the 6 public cases with one trial each. The 20 extended and 8 held-out cases have been run rules-only; running them live with repeats is the next validation step.
+- The live evaluation is one trial on a small, fast model (`gemini-3.5-flash-lite`). The architectures differ by 1–2 cases, so repeats and a stronger model are the next validation step.
+- HO-08 (held-out reuse case) fails in every architecture: reuse judgement on unseen phrasing still needs work.
 - Integration and injection detection use keywords. They are conservative but not exhaustive, and novel phrasing depends on the model's flag.
 - There is no seat-utilisation data, so "unused existing capacity" can only be raised as a question.
 - Policy interpretations are listed in `docs/architecture.md` and need sign-off from the policy owners.
