@@ -135,6 +135,57 @@ def check_mock_api() -> None:
     ok("Mock vendor-risk API checks passed")
 
 
+def check_environment() -> None:
+    """Secrets must not be tracked; report (not require) which model provider is configured."""
+    import subprocess
+
+    try:
+        tracked = subprocess.run(["git", "ls-files", ".env"], cwd=ROOT, capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        tracked = ""
+    if tracked:
+        fail(".env is tracked by git - remove it (git rm --cached .env) and rotate the keys it contains")
+    if not (ROOT / ".env.example").is_file():
+        fail(".env.example is missing")
+    ok(".env is not tracked by git; .env.example present")
+
+    from src.llm import describe_provider, provider_config_problem
+
+    provider, model = describe_provider()
+    if provider:
+        ok(f"Model provider configured: {provider} / {model} (live AI enabled)")
+    else:
+        print(f"[INFO] {provider_config_problem()} - the app will run in rules-only mode")
+
+
+def check_pipeline() -> None:
+    """One request end to end on the rules-only path (no network, no key)."""
+    from fastapi.testclient import TestClient
+    from mock_api.app import app
+    from src import vendor_client
+    from src.solution import analyze_request
+    from src.data_access import get_request
+
+    client = TestClient(app)
+
+    class _Resp:
+        def __init__(self, r):
+            self.status_code, self.text, self._r = r.status_code, r.text, r
+
+        def json(self):
+            return self._r.json()
+
+    original = vendor_client.requests.get
+    vendor_client.requests.get = lambda url, timeout=3.0: _Resp(client.get(url.split("8001", 1)[-1]))
+    try:
+        d = analyze_request(get_request("REQ-1001"), "single", llm=None)
+    finally:
+        vendor_client.requests.get = original
+    if d.required_approvals != ["Manager"] or not d.evidence or not d.human_review_required:
+        fail("End-to-end rules-only run produced an unexpected decision for REQ-1001")
+    ok("End-to-end rules-only analysis works (REQ-1001 -> Manager approval)")
+
+
 def main() -> None:
     print("FDE Assessment 3 - starter pack pre-flight\n")
     check_python()
@@ -142,6 +193,8 @@ def main() -> None:
     check_data()
     check_contract_and_evals()
     check_mock_api()
+    check_pipeline()
+    check_environment()
     print("\nPRE-FLIGHT PASSED")
     print("Next: copy .env.example to .env, add your model credentials, then run: python run_local.py")
 

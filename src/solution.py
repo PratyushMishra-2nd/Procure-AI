@@ -19,7 +19,7 @@ def analyze_request(request: dict[str, Any], architecture: Architecture = "singl
                     llm: LLMClient | None | str = "default") -> CopilotDecision:
     """Analyse a request payload (used by the UI for ad-hoc requests and by the extended evals).
 
-    ``llm="default"`` uses the configured Anthropic client; pass ``None`` for the
+    ``llm="default"`` uses the configured provider (see ``src/llm.py``); pass ``None`` for the
     deterministic-only path or a fake client in tests.
     """
     client = _client() if llm == "default" else llm
@@ -32,6 +32,7 @@ def analyze_request(request: dict[str, Any], architecture: Architecture = "singl
     else:
         raise ValueError(f"Unknown architecture '{architecture}' (expected 'single' or 'staged')")
     decision.latency_ms = round((time.perf_counter() - started) * 1000, 1)
+    decision.provider = getattr(client, "provider", None) if client is not None else None
     return decision
 
 

@@ -107,5 +107,6 @@ def _deterministic(ctx: ToolContext, architecture: str, error: str | None = None
     elif disabled or config.llm_disabled():
         status, why = "disabled", "AI disabled - rules-only run"
     else:
-        status, why = "unavailable", "No model provider configured (set GEMINI_API_KEY, CLOSEROUTER_API_KEY or ANTHROPIC_API_KEY in .env)"
+        from src.llm import provider_config_problem
+        status, why = "unavailable", provider_config_problem() or "No model provider configured"
     return finalize(ctx, None, architecture=architecture, ai_status=status, ai_error=why, model=model)

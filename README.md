@@ -29,7 +29,8 @@ Get a free Gemini key at https://aistudio.google.com/apikey. Without any key, ev
 |---|---|
 | Tests (engine boundaries, guard, agent loops with a scripted LLM, starter integrity) | `python -m pytest -q` |
 | Public eval (starter harness) | `python evals/run_public_evals.py --architecture single` (or `staged`) |
-| Full comparison, same 26 cases on every architecture | `python evals/run_comparison.py` (options: `--arch single staged rules_only --repeats 3 --cases all`) |
+| Full comparison, same 26 cases on every architecture | `python evals/run_comparison.py` (options: `--arch`, `--repeats`, `--cases`, `--case-delay`; `--resume` continues after a quota stop) |
+| Offline baseline only (kept in separate files) | `python evals/run_comparison.py --arch rules_only` |
 
 The eval runners start the mock vendor API themselves if it is not running.
 
@@ -55,13 +56,24 @@ B  request -> Procurement Analyst (5 tools, evidence pack) -> Policy/Risk Review
 
 - **Tools** (all deterministic): `lookup_requester`, `check_budget`, `search_software_catalog`, `get_vendor_risk` (registry + mock API), `evaluate_policy_rules`.
 - **Models** (chosen for the free tier):
-  - **Default:** `gemini-3.7-flash` on Google AI Studio (`gemini-2.5-flash` is closed to new keys) through the official `google-genai` SDK, at temperature 0.
-  - **Alternative:** `google/gemini-3.7-flash` through CloseRouter's OpenAI-compatible endpoint.
-  - **Optional:** Anthropic.
-  - Provider is picked automatically from the keys present, or forced with `LLM_PROVIDER`.
+  - **Gemini:** `gemini-3.7-flash` on Google AI Studio (`gemini-2.5-flash` is closed to new keys) through the official `google-genai` SDK, at temperature 0. Free tier: 20 requests/day per key, so it suits the UI, not a full eval.
+  - **Groq:** `qwen/qwen3.8-27b` through Groq's OpenAI-compatible API. Free tier: about 1000 requests/day but 8000 tokens/minute, so calls are paced by a token-aware limiter. Qwen was picked over `openai/gpt-oss-120b` because it issues all five tool calls in one turn; gpt-oss calls one tool per turn, roughly tripling the tokens per case. Used for the live evaluation.
+  - **Also supported:** `google/gemini-3.7-flash` through CloseRouter, and Anthropic.
+  - The provider is picked automatically from the keys present (Gemini → Groq → CloseRouter → Anthropic), or forced with `LLM_PROVIDER`. A forced provider with a missing key is reported by name, not silently ignored. There is deliberately no automatic switching between providers mid-run, so an eval never mixes models.
   - Older Gemini models cannot combine function calling with a JSON schema in one call, so tool turns run without a schema; the final answer is parsed from the model's text, and if it is not valid JSON, one tool-free schema-enforced call is made.
-  - Free-tier handling: calls are spaced to `GEMINI_RPM`, 429/503 errors back off using the server's retry delay, and `GEMINI_API_KEY_POOL` rotates keys. History is append-only, so Gemini thought signatures are replayed unchanged.
-- **Policy guard:** a union of model and rule requirements. Fact flags no tool raised are removed, and actions less cautious than the rules are raised. Every correction is logged and counted in the eval.
+  - Free-tier handling:
+    - Calls are paced: `GEMINI_RPM` for Gemini; `LLM_RPM` / `LLM_TPM` for Groq and CloseRouter.
+    - A per-minute 429 waits for the server's retry delay. A per-day 429, or a wait longer than `LLM_MAX_RETRY_WAIT`, puts that model into cooldown and fails fast.
+    - Auth and config errors (400/401/403/404) are never retried.
+    - `GEMINI_API_KEY_POOL` rotates Gemini keys.
+  - History is append-only, so Gemini thought signatures are replayed unchanged, including `extra_content` on the OpenAI-compatible path.
+  - Groq quirks: an undeclared `json` tool call, or a 400 `tool_use_failed`, is read as a candidate answer and checked against the schema. It is never executed.
+- **Policy guard:** a union of model and rule requirements. Every correction is logged and counted in the eval.
+  - Fact flags that no tool raised are removed.
+  - Actions less cautious than the rules are raised.
+  - Malformed draft fields (wrong types, unknown enum values) are normalized.
+  - Approval claims in the recommendation, next step or rationale are replaced. Sentences that only *report* an injected claim are kept.
+  - Overlap: code labels each catalog match as `existing_product_expansion`, `competing_product`, `same_vendor_other_product` or `possible_alternative`. The model's classification is corrected when it contradicts that label, and `reuse_existing_tool` is accepted only when the model judged the existing tool sufficient. An add-on to a product we already own is a purchase, not reuse.
 - **Untrusted data:** request JSON is wrapped in `<request_data>`. A regex scanner plus the model flag injection. Injected text is removed before the "is the business purpose real?" check, so REQ-1006's "Need AI ASAP" counts as too vague.
 - **Failure handling:** vendor 503 / unreachable becomes `vendor_risk_unavailable` and requires Security. An unknown vendor is treated as having no assessment. If the model is unavailable, refuses, truncates or loops, the run degrades to a labelled rules-only result.
 
@@ -72,7 +84,7 @@ B  request -> Procurement Analyst (5 tools, evidence pack) -> Policy/Risk Review
 | `src/agents.py` | A and B orchestration, tool loop |
 | `src/guard.py` | merge, corrections, final `CopilotDecision` |
 | `src/prompts.py` | system prompts and output schemas |
-| `src/llm.py`, `src/llm_gemini.py`, `src/llm_openai_compat.py` | provider interface + selection; Gemini, CloseRouter and Anthropic adapters; every failure maps to the rules-only fallback |
+| `src/llm.py`, `src/llm_gemini.py`, `src/llm_openai_compat.py`, `src/ratelimit.py` | provider interface + selection; Gemini, Groq / CloseRouter and Anthropic adapters; request/token pacing and quota cooldown; every failure maps to the rules-only fallback |
 | `src/solution.py` | `handle_request(request_id, architecture)` adapter and `analyze_request(payload)` |
 | `src/contracts.py` | `ProcurementDecision` (unchanged) plus the compatible subclass `CopilotDecision` |
 
@@ -80,7 +92,10 @@ B  request -> Procurement Analyst (5 tools, evidence pack) -> Policy/Risk Review
 
 `evals/extended_cases.json` holds the expected outcome for every dataset request, labelled by hand from the policy, plus 10 synthetic hidden-style cases. They cover exact $1,000 / $1,000.01 / $25,000.01 boundaries, an unknown vendor, a polite injection claiming Security sign-off, a vendor API outage on a clean request, employee PII through Workday, a vague purpose, an unknown requester, and a need already covered by a tool in a different category. Strict scoring checks the **exact approval set**, required and forbidden flags, missing fields, the action, and escalation correctness.
 
-Results are committed under [`evals/results/`](evals/results/).
+Results are committed under [`evals/results/`](evals/results/):
+- Live runs go to `live_<provider>_<model>_*` files; the offline baseline goes to `rules_only_*`. One can never overwrite the other.
+- Progress is saved after every case (`.jsonl`). After a quota stop, `--resume` continues and refuses to mix in a different provider or model.
+- A live run that fell back to rules-only is excluded from quality metrics, counted separately, and re-run on resume.
 
 | Metric | Single (A) | Staged (B) | Rules only |
 |---|---:|---:|---:|

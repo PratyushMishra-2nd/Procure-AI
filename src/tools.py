@@ -138,7 +138,7 @@ class ToolContext:
     def search_software_catalog(self, query: str | None = None, category: str | None = None) -> dict[str, Any]:
         c = pe.match_catalog(self.request, query=query, category=category)
         slim = {
-            "matches": [{k: m[k] for k in ("software_id", "product_name", "vendor_name", "category", "status", "scope", "licensed_seats", "annual_cost_usd", "match_types")} for m in c["matches"]],
+            "matches": [{k: m[k] for k in ("software_id", "product_name", "vendor_name", "category", "status", "scope", "licensed_seats", "annual_cost_usd", "match_types", "relationship")} for m in c["matches"]],
             "overlapping_product_ids": [m["software_id"] for m in c["overlapping"]],
             "seat_utilisation_data_available": False,
         }

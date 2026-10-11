@@ -300,7 +300,16 @@ def match_catalog(request: dict[str, Any], query: str | None = None, category: s
             if query_tokens & haystack:
                 reasons.append("keyword")
         if reasons:
-            matches.append({**item, "match_types": reasons})
+            same_vendor = "same_vendor" in reasons
+            if same_vendor and {"same_product", "same_category"} & set(reasons):
+                relationship = "existing_product_expansion"   # more seats / tier / add-on of a product we own
+            elif {"same_product", "same_category"} & set(reasons):
+                relationship = "competing_product"            # different vendor, same job
+            elif same_vendor:
+                relationship = "same_vendor_other_product"
+            else:
+                relationship = "possible_alternative"         # keyword / use-case match only
+            matches.append({**item, "match_types": reasons, "relationship": relationship})
 
     history = [
         p for p in da.load_purchase_history()
@@ -678,7 +687,7 @@ def describe_catalog(c: dict[str, Any], request: dict[str, Any]) -> list[Finding
         out.append(Finding(
             "software_catalog",
             f"{m['product_name']} by {m['vendor_name']} [{m['status']}] - {m['category']}, scope {m['scope']}, "
-            f"{m['licensed_seats']} seats, {_money(m['annual_cost_usd'])}/yr; match: {', '.join(m['match_types'])}; note: {m['notes']}",
+            f"{m['licensed_seats']} seats, {_money(m['annual_cost_usd'])}/yr; match: {', '.join(m['match_types'])} ({m['relationship'].replace('_', ' ')}); note: {m['notes']}",
             f"software_catalog.csv:{m['software_id']}",
         ))
     if not c["matches"]:

@@ -211,6 +211,10 @@ m[1].metric("LLM calls", tel.llm_calls if tel else 0)
 m[2].metric("Tool calls", tel.tool_calls if tel else 0)
 m[3].metric("Tokens in/out", f"{d.diagnostics.get('input_tokens', 0):,}/{d.diagnostics.get('output_tokens', 0):,}")
 m[4].metric("Architecture", {"single": "A", "staged": "B"}.get(d.architecture, d.architecture) if d.ai_status == "ok" else "rules")
+st.caption(
+    f"Produced by: {'**' + (d.provider or '?') + '** · `' + (d.model or '?') + '`' if d.ai_status == 'ok' else '**rules only** (no model output used)'}"
+    + (f" · AI error: {d.ai_error}" if d.ai_error else "")
+)
 with st.expander("Agent trace"):
     for ev in d.diagnostics.get("trace", []):
         if ev["kind"] == "llm":

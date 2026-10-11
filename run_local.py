@@ -36,6 +36,14 @@ def wait_for_api(url: str, proc: subprocess.Popen, timeout_seconds: float = 10.0
     raise RuntimeError(f"Vendor-risk API did not become ready within {timeout_seconds:.0f}s: {url}")
 
 
+def api_already_running(url: str) -> bool:
+    try:
+        r = requests.get(url, timeout=0.5)
+        return r.ok and r.json().get("status") == "ok"
+    except (requests.RequestException, ValueError):
+        return False
+
+
 def _handle_termination(signum: int, frame: object) -> None:
     """Route SIGTERM through normal cleanup (useful for IDE/terminal stop actions)."""
     raise KeyboardInterrupt
@@ -45,21 +53,16 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_termination)
     procs: list[subprocess.Popen] = []
     try:
-        print("Starting vendor-risk API on http://127.0.0.1:8001 ...")
-        api_proc = start(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "mock_api.app:app",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                "8001",
-            ]
-        )
-        procs.append(api_proc)
-        wait_for_api("http://127.0.0.1:8001/health", api_proc)
+        if api_already_running("http://127.0.0.1:8001/health"):
+            # e.g. an eval run or a previous launch already serves it: reuse instead of a port clash
+            print("Vendor-risk API already running on http://127.0.0.1:8001 - reusing it.")
+        else:
+            print("Starting vendor-risk API on http://127.0.0.1:8001 ...")
+            api_proc = start(
+                [sys.executable, "-m", "uvicorn", "mock_api.app:app", "--host", "127.0.0.1", "--port", "8001"]
+            )
+            procs.append(api_proc)
+            wait_for_api("http://127.0.0.1:8001/health", api_proc)
         print("Vendor-risk API is ready.")
 
         try:

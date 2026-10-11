@@ -62,6 +62,8 @@ def _block_get(block: Any, key: str) -> Any:
 
 
 class AnthropicLLM:
+    provider = "anthropic"
+
     def __init__(self, model: str | None = None, effort: str | None = None):
         import anthropic  # imported lazily so the deterministic path works without the SDK
 
@@ -157,28 +159,50 @@ def has_required_keys(obj: dict[str, Any], schema: dict[str, Any]) -> bool:
     return all(k in obj for k in schema.get("required", []))
 
 
-PROVIDERS = ("gemini", "closerouter", "anthropic")
+PROVIDERS = ("gemini", "groq", "closerouter", "anthropic")
+KEY_ENV = {"gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY", "closerouter": "CLOSEROUTER_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+
+
+def _available() -> dict[str, bool]:
+    from src.llm_gemini import gemini_keys
+
+    return {
+        "gemini": bool(gemini_keys()),
+        "groq": bool(os.getenv("GROQ_API_KEY")),
+        "closerouter": bool(os.getenv("CLOSEROUTER_API_KEY")),
+        "anthropic": bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_PROFILE")),
+    }
 
 
 def configured_provider() -> str | None:
     """Which provider would be used, or None (AI off / no credentials).
 
     ``LLM_PROVIDER`` forces one; ``auto`` (default) picks the first configured of
-    Gemini, CloseRouter, Anthropic.
+    Gemini, Groq, CloseRouter, Anthropic. There is deliberately no automatic
+    switching to another provider at run time: a run (and an eval) uses one model.
     """
     if config.llm_disabled():
         return None
-    from src.llm_gemini import gemini_keys
-
-    available = {
-        "gemini": bool(gemini_keys()),
-        "closerouter": bool(os.getenv("CLOSEROUTER_API_KEY")),
-        "anthropic": bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_PROFILE")),
-    }
+    available = _available()
     wanted = (os.getenv("LLM_PROVIDER") or "auto").strip().lower()
     if wanted in available:
         return wanted if available[wanted] else None
     return next((p for p in PROVIDERS if available[p]), None)
+
+
+def provider_config_problem() -> str | None:
+    """Human-readable reason AI is off, so a misconfiguration is never silent."""
+    if config.llm_disabled():
+        return "AI disabled (COPILOT_LLM=off)"
+    wanted = (os.getenv("LLM_PROVIDER") or "auto").strip().lower()
+    available = _available()
+    if wanted not in ("auto", "") and wanted not in available:
+        return f"LLM_PROVIDER='{wanted}' is not one of {', '.join(PROVIDERS)}"
+    if wanted in available and not available[wanted]:
+        return f"LLM_PROVIDER={wanted} but {KEY_ENV[wanted]} is not set"
+    if not any(available.values()):
+        return "No model provider configured (set GEMINI_API_KEY, GROQ_API_KEY, CLOSEROUTER_API_KEY or ANTHROPIC_API_KEY in .env)"
+    return None
 
 
 def credentials_present() -> bool:
@@ -191,9 +215,10 @@ def describe_provider() -> tuple[str | None, str]:
     if provider == "gemini":
         from src.llm_gemini import DEFAULT_MODEL
         return provider, os.getenv("GEMINI_MODEL") or DEFAULT_MODEL
-    if provider == "closerouter":
-        from src.llm_openai_compat import DEFAULT_MODEL
-        return provider, os.getenv("CLOSEROUTER_MODEL") or DEFAULT_MODEL
+    if provider in ("groq", "closerouter"):
+        from src.llm_openai_compat import PRESETS
+        p = PRESETS[provider]
+        return provider, os.getenv(p.model_env) or p.default_model
     if provider == "anthropic":
         return provider, config.model_name()
     return None, "none (rules-only)"
@@ -205,9 +230,9 @@ def default_client() -> LLMClient | None:
     if provider == "gemini":
         from src.llm_gemini import GeminiLLM
         return GeminiLLM()
-    if provider == "closerouter":
+    if provider in ("groq", "closerouter"):
         from src.llm_openai_compat import OpenAICompatLLM
-        return OpenAICompatLLM()
+        return OpenAICompatLLM(preset=provider)
     if provider == "anthropic":
         return AnthropicLLM()
     return None

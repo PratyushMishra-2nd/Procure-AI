@@ -9,3 +9,6 @@ __pycache__/
 evals/results_*.csv
 runs/
 .playwright-mcp/
+
+# Local documentation (not published)
+docs/

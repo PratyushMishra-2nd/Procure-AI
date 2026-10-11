@@ -95,7 +95,7 @@ ALL_TOOLS = ("lookup_requester", "check_budget", "search_software_catalog", "get
 def decision_draft(**overrides: Any) -> dict[str, Any]:
     base = {
         "need_summary": "need",
-        "overlap_assessment": "no_overlap",
+        "overlap_assessment": "unclear",
         "overlap_explanation": "",
         "insufficient_fields": [],
         "clarification_questions": [],

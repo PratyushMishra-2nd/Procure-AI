@@ -61,6 +61,7 @@ class CopilotDecision(ProcurementDecision):
     guard_adjustments: list[GuardAdjustment] = Field(default_factory=list)
     ai_status: Literal["ok", "unavailable", "disabled"] = "ok"
     ai_error: str | None = None
+    provider: str | None = None
     model: str | None = None
     latency_ms: float | None = None
     diagnostics: dict = Field(default_factory=dict)

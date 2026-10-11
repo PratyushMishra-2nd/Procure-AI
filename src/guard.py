@@ -55,7 +55,71 @@ QUESTION_FOR_FIELD = {
     "data_access_level": "Which data will the tool access (e.g. none, internal documents, confidential documents, employee PII, customer PII, source code, production systems)?",
     "integrations": "Which systems must it integrate with (or confirm none)?",
 }
-APPROVAL_CLAIM = re.compile(r"\b(auto-?approved?|approved for purchase|purchase (is )?approved|has been approved|is approved|i approve|we approve)\b", re.I)
+APPROVAL_CLAIM = re.compile(
+    r"\b(auto-?approved?|approved for purchase|purchase (is )?approved|has (already )?been approved|is (already )?approved|"
+    r"already approved|approved by (the )?(cfo|ceo|security|legal|finance|manager|department head|procurement)|"
+    r"i approve|we approve|(cfo|ceo|security|legal|finance)[- ]approved)\b", re.I)
+# A sentence that *reports* an unverified claim ("the request claims it is CFO-approved; ignored") is not a claim.
+REPORTED_CLAIM = re.compile(r"\b(claim|claims|claimed|claiming|assert|asserts|states|stated|says|alleg\w*|injection|ignored|untrusted|not (been )?verified|unverified)\b", re.I)
+
+LIST_FIELDS = ("required_approvals", "risk_flags", "insufficient_fields", "clarification_questions", "cited_evidence_ids")
+TEXT_FIELDS = ("need_summary", "overlap_assessment", "overlap_explanation", "action", "recommendation", "rationale", "next_step")
+
+
+def claims_approval(text: str) -> bool:
+    for sentence in re.split(r"(?<=[.!?;])\s+", text or ""):
+        if APPROVAL_CLAIM.search(sentence) and not REPORTED_CLAIM.search(sentence):
+            return True
+    return False
+
+
+def normalize_draft(draft: dict[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
+    """Coerce a model draft to the expected shapes; returns (clean draft, schema violations).
+
+    Structured outputs make violations rare, but answers parsed from text (Gemini /
+    Groq tool turns) are only key-checked, so wrong types are fixed here rather than
+    letting e.g. a string be iterated character by character.
+    """
+    if not draft:
+        return {}, []
+    from src.prompts import OVERLAP_VALUES
+
+    clean: dict[str, Any] = dict(draft)
+    issues: list[str] = []
+    for key in LIST_FIELDS:
+        value = draft.get(key, [])
+        if isinstance(value, str):
+            issues.append(f"{key}: string instead of list")
+            value = [value] if value.strip() else []
+        elif not isinstance(value, list):
+            issues.append(f"{key}: {type(value).__name__} instead of list")
+            value = []
+        if any(not isinstance(v, str) for v in value):
+            issues.append(f"{key}: non-string items dropped")
+        clean[key] = [v.strip() for v in value if isinstance(v, str) and v.strip()]
+    for key in TEXT_FIELDS:
+        value = draft.get(key, "")
+        if not isinstance(value, str):
+            issues.append(f"{key}: {type(value).__name__} instead of string")
+            value = ""
+        clean[key] = value.strip()
+    flag = draft.get("prompt_injection_observed", False)
+    if not isinstance(flag, bool):
+        issues.append("prompt_injection_observed: not a boolean")
+        flag = str(flag).strip().lower() in {"true", "yes", "1"}
+    clean["prompt_injection_observed"] = flag
+    if clean["action"] and clean["action"] not in pe.ACTIONS:
+        issues.append(f"action: unknown value '{clean['action']}'")
+        clean["action"] = ""
+    if clean["overlap_assessment"] and clean["overlap_assessment"] not in OVERLAP_VALUES:
+        issues.append(f"overlap_assessment: unknown value '{clean['overlap_assessment']}'")
+        clean["overlap_assessment"] = "unclear"
+    for key, allowed in (("required_approvals", pe.APPROVAL_ORDER), ("risk_flags", pe.RISK_FLAGS),
+                         ("insufficient_fields", list(pe.REQUIRED_FIELDS))):
+        unknown = [v for v in clean[key] if v not in allowed]
+        if unknown:
+            issues.append(f"{key}: unknown values {unknown}")
+    return clean, issues
 
 
 def _join(items: list[str]) -> str:
@@ -117,8 +181,10 @@ def finalize(ctx: ToolContext, draft: dict[str, Any] | None, *, architecture: st
     for finding in policy.findings:
         ctx.add_evidence(finding)
 
-    draft = draft or {}
+    draft, schema_issues = normalize_draft(draft)
     has_draft = bool(draft)
+    if schema_issues:
+        adjust("draft", "normalized", "; ".join(schema_issues))
 
     # ---- approvals
     approval_reasons = {a: list(r) for a, r in policy.approval_reasons.items()}
@@ -168,16 +234,36 @@ def finalize(ctx: ToolContext, draft: dict[str, Any] | None, *, architecture: st
     approvals = [a for a in pe.APPROVAL_ORDER if a in approval_reasons]
     flags = [f for f in pe.RISK_FLAGS if f in flag_reasons]
 
+    # ---- overlap classification: the model judges sufficiency, code knows the relationship
+    overlapping = facts["catalog"]["overlapping"]
+    relationships = {m["relationship"] for m in overlapping}
+    overlap_class = draft.get("overlap_assessment", "")
+    if has_draft and overlap_class:
+        if overlap_class == "no_overlap" and overlapping:
+            adjust("overlap_assessment", "corrected",
+                   f"no_overlap -> unclear: catalog has {', '.join(m['product_name'] for m in overlapping)}")
+            overlap_class = "unclear"
+        elif overlap_class == "expansion_of_existing_tool" and "existing_product_expansion" not in relationships:
+            adjust("overlap_assessment", "corrected",
+                   "expansion_of_existing_tool -> unclear: no same-vendor product in the same category is owned")
+            overlap_class = "unclear"
+    if has_draft:
+        draft["overlap_assessment"] = overlap_class
+
     # ---- action
     floor = "request_clarification" if missing else policy.action_floor
-    overlap_names = [m["product_name"] for m in facts["catalog"]["overlapping"]]
+    overlap_names = [m["product_name"] for m in overlapping]
     action = floor
     draft_action = draft.get("action")
     if draft_action in pe.ACTIONS:
         if draft_action == "reuse_existing_tool":
-            # Reuse is only a valid outcome when overlap exists and nothing else blocks routing.
-            if "existing_tool_overlap" in flags and floor == "route_for_approval":
+            # Reuse is valid only when overlap exists, nothing else blocks routing, and the model itself
+            # judged the existing tool sufficient (an *expansion* is a purchase, not reuse).
+            if "existing_tool_overlap" in flags and floor == "route_for_approval" and overlap_class == "existing_tool_likely_sufficient":
                 action = draft_action
+            elif floor == "route_for_approval":
+                adjust("action", "raised",
+                       f"reuse_existing_tool -> {floor}: inconsistent with overlap classification '{overlap_class or 'none'}'")
             else:
                 adjust("action", "raised", f"reuse_existing_tool -> {floor}: required reviews or missing information come first")
         elif pe.ACTION_SEVERITY[draft_action] >= pe.ACTION_SEVERITY[floor]:
@@ -186,11 +272,17 @@ def finalize(ctx: ToolContext, draft: dict[str, Any] | None, *, architecture: st
             adjust("action", "raised", f"{draft_action} -> {floor}: rules require a more cautious action")
 
     # ---- texts
-    recommendation = draft.get("recommendation", "").strip() if action == draft_action else ""
-    next_step = draft.get("next_step", "").strip() if action == draft_action else ""
-    if recommendation and APPROVAL_CLAIM.search(recommendation):
+    recommendation = draft.get("recommendation", "") if action == draft_action else ""
+    next_step = draft.get("next_step", "") if action == draft_action else ""
+    if recommendation and claims_approval(recommendation):
         adjust("recommendation", "replaced", "draft wording implied an approval decision")
         recommendation = ""
+    if next_step and claims_approval(next_step):
+        adjust("next_step", "replaced", "draft wording implied an approval decision")
+        next_step = ""
+    if has_draft and claims_approval(draft.get("rationale", "")):
+        adjust("rationale", "replaced", "draft wording implied an approval decision")
+        draft["rationale"] = "Model rationale withheld: it stated that an approval had been given, which only a human can do."
     recommendation = recommendation or template_recommendation(action, approvals, flags, missing, overlap_names)
     next_step = next_step or template_next_step(action, approvals, facts, overlap_names)
 
@@ -218,7 +310,8 @@ def finalize(ctx: ToolContext, draft: dict[str, Any] | None, *, architecture: st
         "draft_action": draft_action,
         "draft_approvals": draft_approvals,
         "draft_flags": draft_flags,
-        "guard_corrections": sum(1 for a in adjustments if a.change in {"added", "raised", "removed", "replaced"}),
+        "guard_corrections": sum(1 for a in adjustments if a.change in {"added", "raised", "removed", "replaced", "corrected"}),
+        "schema_issues": schema_issues,
         "invalid_citations": invalid_citations,
         "cited_count": len(valid_citations),
         "external_api_calls": tel.external_api_calls,
