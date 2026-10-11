@@ -127,6 +127,8 @@ See [docs/decision_memo.md](docs/decision_memo.md) (under 500 words). Policy saf
 - **W** is cheapest but scores exactly like rules-only, because a fixed workflow can't go looking for extra evidence.
 - **B** costs more and lost the cases A won.
 
+A's lead is on the extended set, which was used while building; on held-out cases there is no difference.
+
 ## Known limitations
 
 - The live evaluation is one trial on a small, fast model (`gemini-3.5-flash-lite`). The architectures differ by 1–2 cases, so repeats and a stronger model are the next validation step.
